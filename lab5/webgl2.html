@@ -1,0 +1,320 @@
+
+<html>
+
+<head>
+<title>TEST</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+
+
+<!-- Фрагментный шейдер (берет цвет из переменной vColor) -->
+<!--В исходнике использовалась библиотека glMatrix и матрица перспективной проекции (mat4.perspective), 
+которая искажала объекты в зависимости от глубины. 
+Мы полностью удалили библиотеку glMatrix и перешли на ортогональное проектирование, 
+при котором координаты точек передаются напрямую без перспективных искажений 
+(глубина по оси Z больше не влияет на видимый размер фигуры).-->
+<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+    varying vec3 vColor;
+
+    void main(void) {
+        gl_FragColor = vec4(vColor, 1.0);
+    }
+</script>
+
+<!-- Вершинный шейдер (принимает позицию и цвет, передает цвет дальше) -->
+<script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexColor;
+    varying vec3 vColor;
+
+    uniform float uAngle; // Угол поворота
+    uniform vec3 uCenter; // Центр фигуры, вокруг которого она крутится
+
+    void main(void) {
+        // Переносим координаты так, чтобы центр фигуры совпал с (0, 0, 0)
+        vec3 pos = aVertexPosition - uCenter;
+
+        // Поворот вокруг оси Y
+        float cosY = cos(uAngle);
+        float sinY = sin(uAngle);
+        float x1 = pos.x * cosY - pos.z * sinY;
+        float z1 = pos.x * sinY + pos.z * cosY;
+
+        // Небольшой наклон вокруг оси X, чтобы хорошо видеть верхние и нижние грани
+        float angleX = uAngle * 0.5;
+        float cosX = cos(angleX);
+        float sinX = sin(angleX);
+        float y2 = pos.y * cosX - z1 * sinX;
+        float z2 = pos.y * sinX + z1 * cosX;
+
+        // Возвращаем фигуру на её место на экране
+        vec3 finalPos = vec3(x1, y2, z2) + uCenter;
+
+        gl_Position = vec4(finalPos, 1.0);
+        vColor = aVertexColor;
+    }
+</script>
+
+
+<script type="text/javascript">
+
+    var gl;
+    function initGL(canvas) {
+        try {
+            gl = canvas.getContext("experimental-webgl");
+            gl.viewportWidth = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } catch (e) {
+        }
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(");
+        }
+    }
+
+
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var str = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                str += k.textContent;
+            }
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+        gl.shaderSource(shader, str);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+
+    var shaderProgram;
+
+    function initShaders() {
+        var fragmentShader = getShader(gl, "shader-fs");
+        var vertexShader = getShader(gl, "shader-vs");
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+        shaderProgram.vertexColorAttribute = gl.getAttribLocation(shaderProgram, "aVertexColor");
+        gl.enableVertexAttribArray(shaderProgram.vertexColorAttribute);
+
+        shaderProgram.angleUniform = gl.getUniformLocation(shaderProgram, "uAngle");
+        shaderProgram.centerUniform = gl.getUniformLocation(shaderProgram, "uCenter");
+
+    }
+
+
+
+
+
+
+
+    var triangleVertexPositionBuffer;
+    var triangleVertexColorBuffer; // <--- Новый буфер цвета для треугольника
+    var squareVertexPositionBuffer;
+    var squareVertexColorBuffer;   // <--- Новый буфер цвета для квадрата
+
+    function initBuffers() {
+        // ==========================================
+        // 1. ТРЕУГОЛЬНАЯ ПИРАМИДА (4 грани = 12 вершин)
+        // ==========================================
+        triangleVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, triangleVertexPositionBuffer);
+        
+        // Задаем 4 опорные точки пирамиды (сдвинуты влево по X)
+        var top    = [-0.5,  0.4,  0.0]; // Вершина пирамиды
+        var frontL = [-0.8, -0.3,  0.3]; // Передняя левая точка
+        var frontR = [-0.2, -0.3,  0.3]; // Передняя правая точка
+        var back   = [-0.5, -0.3, -0.3]; // Задняя точка
+
+        var pyramidVertices = [
+            // Передняя грань
+            ...top, ...frontL, ...frontR,
+            // Правая грань
+            ...top, ...frontR, ...back,
+            // Левая грань
+            ...top, ...back,   ...frontL,
+            // Нижняя грань (дно)
+            ...frontL, ...back, ...frontR
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pyramidVertices), gl.STATIC_DRAW);
+        triangleVertexPositionBuffer.itemSize = 3;
+        triangleVertexPositionBuffer.numItems = 12; // 4 треугольника по 3 вершины
+
+        // Цвета для граней пирамиды (у всех 3 вершин одной грани одинаковый цвет)
+        // В программе не настроено освещение и тени. 
+        // Если оставить все полигоны белыми (как было изначально в фрагментном шейдере), 
+        // то при вращении грани сольются в единое плоское белое пятно, и зритель не увидит 3D-объёма. 
+        // Разные цвета позволяют визуально отделить одну грань от другой.
+        triangleVertexColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, triangleVertexColorBuffer);
+        var pyramidColors = [
+            // Передняя грань — Красная
+            1.0, 0.0, 0.0,  1.0, 0.0, 0.0,  1.0, 0.0, 0.0,
+            // Правая грань — Зеленая
+            0.0, 1.0, 0.0,  0.0, 1.0, 0.0,  0.0, 1.0, 0.0,
+            // Левая грань — Синяя
+            0.0, 0.0, 1.0,  0.0, 0.0, 1.0,  0.0, 0.0, 1.0,
+            // Дно — Желтое
+            1.0, 1.0, 0.0,  1.0, 1.0, 0.0,  1.0, 1.0, 0.0
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pyramidColors), gl.STATIC_DRAW);
+        triangleVertexColorBuffer.itemSize = 3;
+        triangleVertexColorBuffer.numItems = 12;
+
+
+        // ==========================================
+        // 2. КУБ (6 граней = 12 треугольников = 36 вершин)
+        // ==========================================
+        squareVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer);
+
+        // Координаты куба (сдвинут вправо по X: от 0.2 до 0.8)
+        var cubeVertices = [
+            // Передняя грань (Z = 0.3)
+            0.2,  0.3,  0.3,   0.8,  0.3,  0.3,   0.8, -0.3,  0.3,
+            0.2,  0.3,  0.3,   0.8, -0.3,  0.3,   0.2, -0.3,  0.3,
+            // Задняя грань (Z = -0.3)
+            0.2,  0.3, -0.3,   0.2, -0.3, -0.3,   0.8, -0.3, -0.3,
+            0.2,  0.3, -0.3,   0.8, -0.3, -0.3,   0.8,  0.3, -0.3,
+            // Верхняя грань (Y = 0.3)
+            0.2,  0.3, -0.3,   0.2,  0.3,  0.3,   0.8,  0.3,  0.3,
+            0.2,  0.3, -0.3,   0.8,  0.3,  0.3,   0.8,  0.3, -0.3,
+            // Нижняя грань (Y = -0.3)
+            0.2, -0.3, -0.3,   0.8, -0.3, -0.3,   0.8, -0.3,  0.3,
+            0.2, -0.3, -0.3,   0.8, -0.3,  0.3,   0.2, -0.3,  0.3,
+            // Правая грань (X = 0.8)
+            0.8, -0.3, -0.3,   0.8,  0.3, -0.3,   0.8,  0.3,  0.3,
+            0.8, -0.3, -0.3,   0.8,  0.3,  0.3,   0.8, -0.3,  0.3,
+            // Левая грань (X = 0.2)
+            0.2, -0.3, -0.3,   0.2, -0.3,  0.3,   0.2,  0.3,  0.3,
+            0.2, -0.3, -0.3,   0.2,  0.3,  0.3,   0.2,  0.3, -0.3
+        ];
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeVertices), gl.STATIC_DRAW);
+        squareVertexPositionBuffer.itemSize = 3;
+        squareVertexPositionBuffer.numItems = 36; // 6 граней * 2 треугольника * 3 вершины
+
+        // Раскрашиваем каждую из 6 граней куба в свой цвет (по 6 вершин на грань)
+        squareVertexColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexColorBuffer);
+        
+        var faceColors = [
+            [1.0, 0.0, 0.0], // Передняя — Красная
+            [0.0, 1.0, 0.0], // Задняя — Зеленая
+            [0.0, 0.0, 1.0], // Верхняя — Синяя
+            [1.0, 1.0, 0.0], // Нижняя — Желтая
+            [1.0, 0.0, 1.0], // Правая — Пурпурная
+            [0.0, 1.0, 1.0]  // Левая — Голубая
+        ];
+
+        var cubeColors = [];
+        for (var i = 0; i < faceColors.length; i++) {
+            var c = faceColors[i];
+            // Повторяем цвет 6 раз для всех вершин одной грани
+            for (var j = 0; j < 6; j++) {
+                cubeColors = cubeColors.concat(c);
+            }
+        }
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeColors), gl.STATIC_DRAW);
+        squareVertexColorBuffer.itemSize = 3;
+        squareVertexColorBuffer.numItems = 36;
+    }
+
+
+    var angle = 0.0;
+
+    function drawScene() {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        // Передаем текущий угол поворота в шейдер
+        gl.uniform1f(shaderProgram.angleUniform, angle);
+
+        // --- 1. Рисуем пирамиду (её центр находится в X = -0.5) ---
+        gl.uniform3f(shaderProgram.centerUniform, -0.5, 0.0, 0.0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, triangleVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, triangleVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, triangleVertexColorBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexColorAttribute, triangleVertexColorBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, triangleVertexPositionBuffer.numItems);
+
+        // --- 2. Рисуем куб (его центр находится в X = 0.5) ---
+        gl.uniform3f(shaderProgram.centerUniform, 0.5, 0.0, 0.0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, squareVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexColorBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexColorAttribute, squareVertexColorBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, squareVertexPositionBuffer.numItems);
+    }
+
+    // Функция анимации (вызывается браузером 60 раз в секунду)
+    // анимация работает за счёт цикла requestAnimationFrame в JavaScript,
+    //  который каждый кадр увеличивает угол поворота uAngle и вызывает перерисовку drawScene().
+    //  В вершинном шейдере к координатам применяются тригонометрические формулы поворота (через sin и cos) относительно центра конкретной фигуры (uCenter).
+    function tick() {
+        requestAnimationFrame(tick);
+        angle += 0.004; // Увеличиваем угол поворота
+        drawScene();   // Перерисовываем сцену
+    }
+
+    function webGLStart() {
+        var canvas = document.getElementById("lesson01-canvas");
+        initGL(canvas);
+        initShaders();
+        initBuffers();
+
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+
+        tick(); // Запускаем цикл анимации вместо разовой отрисовки
+    }
+
+
+</script>
+
+
+</head>
+
+
+<body onload="webGLStart();">
+
+    <canvas id="lesson01-canvas" style="border: none;" width="500" height="500"></canvas>
+
+
+</body>
+
+</html>
